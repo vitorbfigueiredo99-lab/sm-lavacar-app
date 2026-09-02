@@ -15,7 +15,7 @@ import {
   createAppointment, updateAppointmentStatus, updateAppointmentPayment, rateAppointment,
   consumeStockRemote, addStockEntry, fetchPublicData, fetchServices, updateService,
   fetchClients, fetchVehiclesAdmin, createEmployee, updateEmployee, cancelAppointment, findClientByPhone,
-  fetchMyVehiclesFull, addVehicle, addVehicleAdmin,
+  fetchMyVehiclesFull, addVehicle, addVehicleAdmin, createClientAdmin,
 } from "./api";
 
 /* =========================================================================
@@ -1778,16 +1778,32 @@ function AdminClientes({ clientsDb, appointments }) {
   const [realClients, setRealClients] = useState(null);
   const [realVehicles, setRealVehicles] = useState([]);
   const [loading, setLoading] = useState(supabaseEnabled);
+  const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [form, setForm] = useState({ name: "", phone: "", email: "" });
 
-  useEffect(() => {
+  const reload = () => {
     if (!supabaseEnabled) return;
-    let cancelled = false;
-    Promise.all([fetchClients(), fetchVehiclesAdmin()]).then(([cs, vs]) => {
-      if (cancelled) return;
-      setRealClients(cs); setRealVehicles(vs); setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, []);
+    Promise.all([fetchClients(), fetchVehiclesAdmin()]).then(([cs, vs]) => { setRealClients(cs); setRealVehicles(vs); setLoading(false); });
+  };
+  useEffect(() => { reload(); }, []);
+
+  const resetForm = () => { setForm({ name: "", phone: "", email: "" }); setFormError(""); setAdding(false); };
+
+  const submitClient = async () => {
+    if (!form.name.trim() || !form.phone.trim()) { setFormError("Preencha ao menos nome e telefone."); return; }
+    setSaving(true);
+    try {
+      await createClientAdmin(form);
+      reload();
+      resetForm();
+    } catch (err) {
+      setFormError("Não foi possível salvar o cliente. Tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const list = supabaseEnabled && realClients ? realClients.map((c) => {
     const myVehicles = realVehicles.filter((v) => v.client_id === c.id).map((v) => `${v.brand} ${v.model} - ${v.plate}`);
@@ -1801,11 +1817,27 @@ function AdminClientes({ clientsDb, appointments }) {
 
   return (
     <div className="space-y-5">
-      <div><h1 className="font-display text-xl text-slate-50">Clientes</h1><p className="text-sm text-slate-500">{list.length} clientes cadastrados</p></div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="font-display text-xl text-slate-50">Clientes</h1><p className="text-sm text-slate-500">{list.length} clientes cadastrados</p></div>
+        {supabaseEnabled && <button onClick={()=>{resetForm(); setAdding(true);}} className="flex items-center gap-1.5 rounded-xl bg-cyan-400 text-slate-950 text-sm font-medium px-3.5 py-2"><Plus size={14}/> Novo cliente</button>}
+      </div>
       <div className="relative max-w-sm">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
         <input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Buscar por nome, telefone ou placa..." className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-200 placeholder-slate-500" />
       </div>
+      {adding && (
+        <div className="rounded-2xl bg-slate-900 border border-cyan-500/30 p-4 space-y-2.5 max-w-md">
+          <p className="text-sm font-medium text-slate-100 mb-1">Novo cliente</p>
+          <input placeholder="Nome completo" value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+          <input placeholder="Telefone" value={form.phone} onChange={(e)=>setForm({...form,phone:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+          <input placeholder="E-mail (opcional)" value={form.email} onChange={(e)=>setForm({...form,email:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+          {formError && <p className="text-xs text-rose-400">{formError}</p>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={resetForm} className="flex-1 rounded-lg bg-slate-800 text-slate-200 py-2 text-sm font-medium">Cancelar</button>
+            <button onClick={submitClient} disabled={saving} className="flex-1 rounded-lg bg-cyan-400 disabled:opacity-60 text-slate-950 py-2 text-sm font-medium">{saving ? "Salvando..." : "Salvar cliente"}</button>
+          </div>
+        </div>
+      )}
       {loading ? (
         <p className="text-sm text-slate-500">Carregando clientes...</p>
       ) : (

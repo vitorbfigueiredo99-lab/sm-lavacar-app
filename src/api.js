@@ -220,6 +220,12 @@ export async function updateService(service) {
   }
 }
 
+export async function createClientAdmin(c) {
+  const { data, error } = await supabase.from("clients").insert({ name: c.name, phone: c.phone, email: c.email || null }).select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
 export async function fetchClients() {
   const { data, error } = await supabase.from("clients").select("*").order("created_at", { ascending: false });
   if (error) { console.error(error); return []; }
