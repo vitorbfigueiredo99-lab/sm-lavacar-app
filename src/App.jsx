@@ -1324,7 +1324,7 @@ function AdminApp({ appointments, setAppointments, queue, employees, setEmployee
           </button>
         )}
         {tab === "dashboard" && <AdminDashboard appointments={appointments} queue={queue} lowStock={lowStock} />}
-        {tab === "agenda" && <AdminAgenda appointments={appointments} updateStatus={updateStatus} />}
+        {tab === "agenda" && <AdminAgenda appointments={appointments} updateStatus={updateStatus} setAppointments={setAppointments} />}
         {tab === "fila" && <AdminQueue queue={queue} updateStatus={updateStatus} />}
         {tab === "atendimentos" && <AdminAtendimentos appointments={appointments} updateStatus={updateStatus} updatePayment={updatePayment} employees={employees} />}
         {tab === "clientes" && <AdminClientes clientsDb={clientsDb} appointments={appointments} />}
@@ -1432,11 +1432,49 @@ function AdminDashboard({ appointments, queue, lowStock }) {
   );
 }
 
-function AdminAgenda({ appointments, updateStatus }) {
+function AdminAgenda({ appointments, updateStatus, setAppointments }) {
+  const services = React.useContext(ServicesContext);
   const [view, setView] = useState("dia");
   const [date, setDate] = useState(todayISO());
   const dayAppts = appointments.filter((a) => a.date === date).sort((a,b)=>a.time.localeCompare(b.time));
   const weekDates = [0,1,2,3,4,5,6].map((n)=>addDaysISO(n));
+
+  const [clients, setClients] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
+  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const blankForm = { clientId: "", vehicleId: "", serviceId: services[0]?.id || "", tier: "", date: date, time: TIME_SLOTS[0] };
+  const [form, setForm] = useState(blankForm);
+
+  useEffect(() => {
+    if (!supabaseEnabled) return;
+    Promise.all([fetchClients(), fetchVehiclesAdmin()]).then(([cs, vs]) => { setClients(cs); setVehicles(vs); });
+  }, []);
+
+  const openCreate = () => { setForm({ ...blankForm, date, serviceId: services[0]?.id || "" }); setFormError(""); setCreating(true); };
+  const clientVehicles = vehicles.filter((v) => v.client_id === form.clientId);
+  const selectedService = services.find((s) => s.id === form.serviceId);
+
+  const submitAppointment = async () => {
+    if (!form.clientId || !form.vehicleId || !form.serviceId || !form.time) { setFormError("Preencha todos os campos."); return; }
+    if (selectedService?.tiered && !form.tier) { setFormError("Escolha o porte do veículo para o polimento."); return; }
+    setSaving(true);
+    try {
+      const price = servicePrice(selectedService, form.tier);
+      const client = clients.find((c) => c.id === form.clientId);
+      const vehicle = vehicles.find((v) => v.id === form.vehicleId);
+      if (supabaseEnabled) {
+        const newId = await createAppointment({ clientId: form.clientId, vehicleId: form.vehicleId, serviceId: form.serviceId, tier: form.tier || null, price, date: form.date, time: form.time });
+        setAppointments((prev) => [...prev, { id: newId, clientId: form.clientId, clientName: client?.name, vehicle: `${vehicle.brand} ${vehicle.model} - ${vehicle.plate}`, serviceId: form.serviceId, tier: form.tier || null, price, date: form.date, time: form.time, status: "agendado", payment: { status: "pendente" }, rating: null, photos: null }]);
+      }
+      setCreating(false);
+    } catch (err) {
+      setFormError("Não foi possível criar o agendamento. Tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -1445,12 +1483,67 @@ function AdminAgenda({ appointments, updateStatus }) {
           <h1 className="font-display text-xl text-slate-50">Agenda</h1>
           <p className="text-sm text-slate-500">Gerencie os agendamentos do lava-rápido</p>
         </div>
-        <div className="flex gap-1 bg-slate-900 rounded-xl p-1 border border-slate-800">
-          {["dia","semana","mes"].map((v) => (
-            <button key={v} onClick={() => setView(v)} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${view===v ? "bg-cyan-400 text-slate-950":"text-slate-400"}`}>{v}</button>
-          ))}
+        <div className="flex items-center gap-2">
+          {supabaseEnabled && <button onClick={openCreate} className="flex items-center gap-1.5 rounded-xl bg-cyan-400 text-slate-950 text-sm font-medium px-3.5 py-2"><Plus size={14}/> Novo agendamento</button>}
+          <div className="flex gap-1 bg-slate-900 rounded-xl p-1 border border-slate-800">
+            {["dia","semana","mes"].map((v) => (
+              <button key={v} onClick={() => setView(v)} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${view===v ? "bg-cyan-400 text-slate-950":"text-slate-400"}`}>{v}</button>
+            ))}
+          </div>
         </div>
       </div>
+
+      {creating && (
+        <div className="rounded-2xl bg-slate-900 border border-cyan-500/30 p-4 space-y-3 max-w-lg">
+          <p className="text-sm font-medium text-slate-100">Novo agendamento</p>
+          <div>
+            <label className="text-xs text-slate-400">Cliente</label>
+            <select value={form.clientId} onChange={(e)=>setForm({...form, clientId: e.target.value, vehicleId: ""})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+              <option value="">Selecione...</option>
+              {clients.map((c)=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Veículo</label>
+            <select value={form.vehicleId} onChange={(e)=>setForm({...form, vehicleId: e.target.value})} disabled={!form.clientId} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1 disabled:opacity-50">
+              <option value="">{form.clientId ? (clientVehicles.length ? "Selecione..." : "Cliente sem veículos cadastrados") : "Escolha o cliente primeiro"}</option>
+              {clientVehicles.map((v)=><option key={v.id} value={v.id}>{v.brand} {v.model} - {v.plate}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Serviço</label>
+            <select value={form.serviceId} onChange={(e)=>setForm({...form, serviceId: e.target.value, tier: ""})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+              {services.filter((s)=>s.active).map((s)=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          {selectedService?.tiered && (
+            <div>
+              <label className="text-xs text-slate-400">Porte do veículo</label>
+              <select value={form.tier} onChange={(e)=>setForm({...form, tier: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+                <option value="">Selecione...</option>
+                {Object.keys(selectedService.tiers || {}).map((size)=><option key={size} value={size}>{size} — {money(selectedService.tiers[size])}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-slate-400">Data</label>
+              <input type="date" value={form.date} onChange={(e)=>setForm({...form, date: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400">Horário</label>
+              <select value={form.time} onChange={(e)=>setForm({...form, time: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+                {TIME_SLOTS.map((t)=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          {formError && <p className="text-xs text-rose-400">{formError}</p>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={()=>setCreating(false)} className="flex-1 rounded-lg bg-slate-800 text-slate-200 py-2 text-sm font-medium">Cancelar</button>
+            <button onClick={submitAppointment} disabled={saving} className="flex-1 rounded-lg bg-cyan-400 disabled:opacity-60 text-slate-950 py-2 text-sm font-medium">{saving ? "Salvando..." : "Criar agendamento"}</button>
+          </div>
+        </div>
+      )}
 
       {view === "dia" && (
         <>
