@@ -15,6 +15,7 @@ import {
   createAppointment, updateAppointmentStatus, updateAppointmentPayment, rateAppointment,
   consumeStockRemote, addStockEntry, fetchPublicData, fetchServices, updateService,
   fetchClients, fetchVehiclesAdmin, createEmployee, updateEmployee, cancelAppointment, findClientByPhone,
+  fetchMyVehiclesFull, addVehicle, addVehicleAdmin,
 } from "./api";
 
 /* =========================================================================
@@ -49,6 +50,7 @@ const SERVICES = [
 ];
 
 const ServicesContext = React.createContext(SERVICES);
+const VehiclesContext = React.createContext({ vehicles: [], addVehicle: () => {} });
 
 const TIME_SLOTS = ["08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00"];
 const MAX_CAPACITY = 3;
@@ -240,6 +242,7 @@ function StatusStepper({ status }) {
 /* ============================== CLIENT APP ============================== */
 
 function ClientApp({ appointments, setAppointments, queue, notifications, pushNotification, myClientId, vehicleIdByPlate, services }) {
+  const { vehicles } = React.useContext(VehiclesContext);
   const [tab, setTab] = useState("inicio");
   const [booking, setBooking] = useState(null);
   const [goingNowResult, setGoingNowResult] = useState(null);
@@ -256,7 +259,7 @@ function ClientApp({ appointments, setAppointments, queue, notifications, pushNo
   const startBooking = () => setBooking({ step: 1, vehicleId: null, serviceId: null, tier: null, date: todayISO(), time: null });
 
   const confirmBooking = async () => {
-    const veh = MY_VEHICLES.find((v) => v.id === booking.vehicleId);
+    const veh = vehicles.find((v) => v.id === booking.vehicleId);
     const service = services.find((s) => s.id === booking.serviceId);
     const price = servicePrice(service, booking.tier);
     const vehicleLabel = `${veh.brand} ${veh.model} - ${veh.plate}`;
@@ -282,7 +285,7 @@ function ClientApp({ appointments, setAppointments, queue, notifications, pushNo
     const activeAhead = queue.filter((a) => ["chegou","aguardando","lavagem","finalizacao"].includes(a.status)).length;
     const position = activeAhead + 1;
     const estWait = activeAhead * 15;
-    const veh = MY_VEHICLES[0];
+    const veh = vehicles[0];
     const vehicleLabel = `${veh.brand} ${veh.model} - ${veh.plate}`;
     const price = services.find((s) => s.id === "s1").price;
 
@@ -377,6 +380,7 @@ function ClientApp({ appointments, setAppointments, queue, notifications, pushNo
 
 function ClientHome({ nextAppointment, inServiceNow, onAgendar, onGoingNow, onOpenHistorico, onOpenVeiculos, queueCount, onCancelAppointment }) {
   const services = React.useContext(ServicesContext);
+  const { vehicles } = React.useContext(VehiclesContext);
   const [cancelling, setCancelling] = useState(false);
   return (
     <div className="space-y-5 pt-1">
@@ -437,7 +441,7 @@ function ClientHome({ nextAppointment, inServiceNow, onAgendar, onGoingNow, onOp
         <button onClick={onOpenVeiculos} className="rounded-2xl bg-slate-900 border border-slate-800 p-4 text-left active:scale-[0.98] transition-transform">
           <Car size={18} className="text-cyan-400 mb-2" />
           <p className="text-sm font-medium text-slate-100">Meus veículos</p>
-          <p className="text-xs text-slate-500">{MY_VEHICLES.length} cadastrados</p>
+          <p className="text-xs text-slate-500">{vehicles.length} cadastrados</p>
         </button>
         <button onClick={onOpenHistorico} className="rounded-2xl bg-slate-900 border border-slate-800 p-4 text-left active:scale-[0.98] transition-transform">
           <History size={18} className="text-cyan-400 mb-2" />
@@ -472,6 +476,7 @@ function ClientHome({ nextAppointment, inServiceNow, onAgendar, onGoingNow, onOp
 
 function BookingFlow({ booking, setBooking, onStart, onConfirm, onDone }) {
   const services = React.useContext(ServicesContext);
+  const { vehicles } = React.useContext(VehiclesContext);
   if (!booking) {
     return (
       <div className="pt-12 text-center">
@@ -484,7 +489,7 @@ function BookingFlow({ booking, setBooking, onStart, onConfirm, onDone }) {
 
   const { step, vehicleId, serviceId, tier, date, time } = booking;
   const service = services.find((s) => s.id === serviceId);
-  const vehicle = MY_VEHICLES.find((v) => v.id === vehicleId);
+  const vehicle = vehicles.find((v) => v.id === vehicleId);
   const set = (patch) => setBooking({ ...booking, ...patch });
   const isSlotFull = (t) => (t === "09:00" || t === "10:00") && date === todayISO();
   const price = servicePrice(service, tier);
@@ -512,7 +517,7 @@ function BookingFlow({ booking, setBooking, onStart, onConfirm, onDone }) {
       {step === 1 && (
         <div className="space-y-3">
           <SectionTitle icon={Car} title="Escolha o veículo" subtitle="Passo 1 de 4" />
-          {MY_VEHICLES.map((v) => (
+          {vehicles.map((v) => (
             <button key={v.id} onClick={() => set({ vehicleId: v.id, step: 2 })}
               className={`w-full flex items-center justify-between rounded-2xl border p-4 text-left ${vehicleId === v.id ? "border-cyan-400 bg-cyan-500/5" : "border-slate-800 bg-slate-900"}`}>
               <div>
@@ -743,6 +748,27 @@ function RatingModal({ appt, onClose, onSubmit }) {
 
 function ProfileTab({ reviews }) {
   const [subtab, setSubtab] = useState("dados");
+  const { vehicles, addVehicle } = React.useContext(VehiclesContext);
+  const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [form, setForm] = useState({ brand: "", model: "", year: "", color: "", plate: "", type: "Sedã", size: "Médio", notes: "" });
+
+  const resetForm = () => { setForm({ brand: "", model: "", year: "", color: "", plate: "", type: "Sedã", size: "Médio", notes: "" }); setFormError(""); setAdding(false); };
+
+  const submitVehicle = async () => {
+    if (!form.brand.trim() || !form.model.trim() || !form.plate.trim()) { setFormError("Preencha ao menos marca, modelo e placa."); return; }
+    setSaving(true);
+    try {
+      await addVehicle(form);
+      resetForm();
+    } catch (err) {
+      setFormError("Não foi possível salvar o veículo. Tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="pt-1">
       <div className="flex items-center gap-3 mb-5">
@@ -770,17 +796,43 @@ function ProfileTab({ reviews }) {
 
       {subtab === "veiculos" && (
         <div className="space-y-2">
-          {MY_VEHICLES.map((v) => (
+          {vehicles.map((v) => (
             <div key={v.id} className="rounded-2xl bg-slate-900 border border-slate-800 p-4 flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center"><Car size={18} className="text-cyan-400"/></div>
               <div className="flex-1">
                 <p className="text-sm font-medium text-slate-100">{v.brand} {v.model} · {v.color}</p>
                 <p className="text-xs text-slate-500">{v.plate} · {v.type} · {v.year}</p>
               </div>
-              <Edit3 size={14} className="text-slate-500" />
             </div>
           ))}
-          <button className="w-full rounded-xl border border-dashed border-slate-700 py-3 text-sm text-slate-400 flex items-center justify-center gap-1.5"><Plus size={14}/> Adicionar veículo</button>
+          {!adding && <button onClick={() => setAdding(true)} className="w-full rounded-xl border border-dashed border-slate-700 py-3 text-sm text-slate-400 flex items-center justify-center gap-1.5"><Plus size={14}/> Adicionar veículo</button>}
+
+          {adding && (
+            <div className="rounded-2xl bg-slate-900 border border-cyan-500/30 p-4 space-y-2.5">
+              <p className="text-sm font-medium text-slate-100 mb-1">Novo veículo</p>
+              <div className="grid grid-cols-2 gap-2.5">
+                <input placeholder="Marca" value={form.brand} onChange={(e)=>setForm({...form,brand:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+                <input placeholder="Modelo" value={form.model} onChange={(e)=>setForm({...form,model:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+                <input placeholder="Ano" value={form.year} onChange={(e)=>setForm({...form,year:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+                <input placeholder="Cor" value={form.color} onChange={(e)=>setForm({...form,color:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+                <input placeholder="Placa" value={form.plate} onChange={(e)=>setForm({...form,plate:e.target.value.toUpperCase()})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+                <select value={form.type} onChange={(e)=>setForm({...form,type:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100">
+                  {["Sedã","Hatch","SUV","Caminhonete","Moto"].map((t)=><option key={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Porte (usado no preço do polimento)</label>
+                <select value={form.size} onChange={(e)=>setForm({...form,size:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+                  {["Pequeno","Médio","Grande","Caminhonete"].map((s)=><option key={s}>{s}</option>)}
+                </select>
+              </div>
+              {formError && <p className="text-xs text-rose-400">{formError}</p>}
+              <div className="flex gap-2 pt-1">
+                <button onClick={resetForm} className="flex-1 rounded-lg bg-slate-800 text-slate-200 py-2 text-sm font-medium">Cancelar</button>
+                <button onClick={submitVehicle} disabled={saving} className="flex-1 rounded-lg bg-cyan-400 disabled:opacity-60 text-slate-950 py-2 text-sm font-medium">{saving ? "Salvando..." : "Salvar veículo"}</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1713,16 +1765,34 @@ function AdminVeiculos({ appointments }) {
   const [realClients, setRealClients] = useState([]);
   const [loading, setLoading] = useState(supabaseEnabled);
   const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [form, setForm] = useState({ clientId: "", brand: "", model: "", year: "", color: "", plate: "", type: "Sedã", size: "Médio" });
 
-  useEffect(() => {
+  const reload = () => {
     if (!supabaseEnabled) return;
-    let cancelled = false;
-    Promise.all([fetchVehiclesAdmin(), fetchClients()]).then(([vs, cs]) => {
-      if (cancelled) return;
-      setRealVehicles(vs); setRealClients(cs); setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, []);
+    Promise.all([fetchVehiclesAdmin(), fetchClients()]).then(([vs, cs]) => { setRealVehicles(vs); setRealClients(cs); setLoading(false); });
+  };
+  useEffect(() => { reload(); }, []);
+
+  const resetForm = () => { setForm({ clientId: realClients[0]?.id || "", brand: "", model: "", year: "", color: "", plate: "", type: "Sedã", size: "Médio" }); setFormError(""); setAdding(false); };
+  const openAdd = () => { setForm({ clientId: realClients[0]?.id || "", brand: "", model: "", year: "", color: "", plate: "", type: "Sedã", size: "Médio" }); setAdding(true); };
+
+  const submitVehicle = async () => {
+    if (!form.clientId) { setFormError("Selecione o cliente."); return; }
+    if (!form.brand.trim() || !form.model.trim() || !form.plate.trim()) { setFormError("Preencha ao menos marca, modelo e placa."); return; }
+    setSaving(true);
+    try {
+      await addVehicleAdmin(form.clientId, form);
+      reload();
+      resetForm();
+    } catch (err) {
+      setFormError("Não foi possível salvar o veículo. Verifique os dados e tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   let list;
   if (supabaseEnabled && realVehicles) {
@@ -1746,11 +1816,47 @@ function AdminVeiculos({ appointments }) {
 
   return (
     <div className="space-y-5">
-      <div><h1 className="font-display text-xl text-slate-50">Veículos</h1><p className="text-sm text-slate-500">{list.length} veículos cadastrados</p></div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="font-display text-xl text-slate-50">Veículos</h1><p className="text-sm text-slate-500">{list.length} veículos cadastrados</p></div>
+        {supabaseEnabled && <button onClick={openAdd} className="flex items-center gap-1.5 rounded-xl bg-cyan-400 text-slate-950 text-sm font-medium px-3.5 py-2"><Plus size={14}/> Novo veículo</button>}
+      </div>
       <div className="relative max-w-sm">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
         <input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Buscar por placa ou proprietário..." className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-200 placeholder-slate-500" />
       </div>
+      {adding && (
+        <div className="rounded-2xl bg-slate-900 border border-cyan-500/30 p-4 space-y-2.5 max-w-lg">
+          <p className="text-sm font-medium text-slate-100 mb-1">Cadastrar veículo</p>
+          <div>
+            <label className="text-xs text-slate-400">Cliente</label>
+            <select value={form.clientId} onChange={(e)=>setForm({...form,clientId:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+              <option value="">Selecione...</option>
+              {realClients.map((c)=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <input placeholder="Marca" value={form.brand} onChange={(e)=>setForm({...form,brand:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+            <input placeholder="Modelo" value={form.model} onChange={(e)=>setForm({...form,model:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+            <input placeholder="Ano" value={form.year} onChange={(e)=>setForm({...form,year:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+            <input placeholder="Cor" value={form.color} onChange={(e)=>setForm({...form,color:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+            <input placeholder="Placa" value={form.plate} onChange={(e)=>setForm({...form,plate:e.target.value.toUpperCase()})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100" />
+            <select value={form.type} onChange={(e)=>setForm({...form,type:e.target.value})} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100">
+              {["Sedã","Hatch","SUV","Caminhonete","Moto"].map((t)=><option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Porte (usado no preço do polimento)</label>
+            <select value={form.size} onChange={(e)=>setForm({...form,size:e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 mt-1">
+              {["Pequeno","Médio","Grande","Caminhonete"].map((s)=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+          {formError && <p className="text-xs text-rose-400">{formError}</p>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={resetForm} className="flex-1 rounded-lg bg-slate-800 text-slate-200 py-2 text-sm font-medium">Cancelar</button>
+            <button onClick={submitVehicle} disabled={saving} className="flex-1 rounded-lg bg-cyan-400 disabled:opacity-60 text-slate-950 py-2 text-sm font-medium">{saving ? "Salvando..." : "Salvar veículo"}</button>
+          </div>
+        </div>
+      )}
       {loading ? <p className="text-sm text-slate-500">Carregando veículos...</p> : (
       <div className="rounded-2xl bg-slate-900 border border-slate-800 overflow-x-auto">
         <table className="w-full text-sm">
@@ -2338,6 +2444,7 @@ export default function LavaRapidoSystem() {
 
   const [myClientId, setMyClientId] = useState("you");
   const [vehicleIdByPlate, setVehicleIdByPlate] = useState({});
+  const [myVehicles, setMyVehicles] = useState(MY_VEHICLES);
   const [employeesState, setEmployeesState] = useState([]);
 
   const loadedRef = useRef(false);
@@ -2373,7 +2480,11 @@ export default function LavaRapidoSystem() {
     (async () => {
       const ctx = await ensureClientAndVehicles(MY_VEHICLES);
       if (cancelled) return;
-      if (ctx) { setMyClientId(ctx.clientId); setVehicleIdByPlate(ctx.vehicleIdByPlate); }
+      if (ctx) {
+        setMyClientId(ctx.clientId);
+        setVehicleIdByPlate(ctx.vehicleIdByPlate);
+        fetchMyVehiclesFull(ctx.clientId).then((vs) => { if (!cancelled && vs.length) setMyVehicles(vs); });
+      }
 
       const [prods, log, emps, svcs] = await Promise.all([fetchProducts(), fetchStockLog(), fetchEmployees(), fetchServices()]);
       if (svcs && svcs.length) setServicesState(svcs);
@@ -2441,6 +2552,18 @@ export default function LavaRapidoSystem() {
   }, [appointments, products, stockLog, security]);
 
   const pushNotification = (text) => setNotifications((prev) => [{ id: Date.now(), text }, ...prev]);
+
+  const handleAddVehicle = async (v) => {
+    if (supabaseEnabled) {
+      const newId = await addVehicle(myClientId, v);
+      const newVehicle = { id: newId, ...v };
+      setMyVehicles((prev) => [...prev, newVehicle]);
+      setVehicleIdByPlate((prev) => ({ ...prev, [v.plate]: newId }));
+    } else {
+      const newId = "v" + Math.random().toString(36).slice(2, 8);
+      setMyVehicles((prev) => [...prev, { id: newId, ...v }]);
+    }
+  };
   const addStockLog = (entry) => setStockLog((prev) => [{ id: Date.now() + Math.random(), date: new Date().toLocaleString("pt-BR"), ...entry }, ...prev]);
 
   const resetDemo = () => {
@@ -2482,6 +2605,7 @@ export default function LavaRapidoSystem() {
 
         <div className="flex-1 min-h-0 relative">
           <ServicesContext.Provider value={servicesState}>
+          <VehiclesContext.Provider value={{ vehicles: myVehicles, addVehicle: handleAddVehicle }}>
           {dbLoading ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-slate-500">
               <Loader2 size={22} className="animate-spin text-cyan-400" />
@@ -2512,6 +2636,7 @@ export default function LavaRapidoSystem() {
               onLogout={() => { if (supabaseEnabled) supabase.auth.signOut(); setAdminAuthed(false); }}
             />
           )}
+          </VehiclesContext.Provider>
           </ServicesContext.Provider>
         </div>
       </div>

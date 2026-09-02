@@ -226,6 +226,30 @@ export async function fetchClients() {
   return data;
 }
 
+export async function fetchMyVehiclesFull(clientId) {
+  const { data, error } = await supabase.rpc("list_my_vehicles_full", { p_client_id: clientId });
+  if (error) { console.error(error); return []; }
+  return data.map((v) => ({ id: v.id, brand: v.brand, model: v.model, year: v.year, color: v.color, plate: v.plate, type: v.type, size: v.size, notes: v.notes }));
+}
+
+export async function addVehicle(clientId, v) {
+  const { data, error } = await supabase.rpc("register_vehicle", {
+    p_client_id: clientId, p_brand: v.brand, p_model: v.model, p_year: v.year, p_color: v.color,
+    p_plate: v.plate, p_type: v.type, p_size: v.size, p_notes: v.notes || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function addVehicleAdmin(clientId, v) {
+  const { data, error } = await supabase.from("vehicles").insert({
+    client_id: clientId, brand: v.brand, model: v.model, year: v.year, color: v.color,
+    plate: v.plate, type: v.type, size: v.size, notes: v.notes || null,
+  }).select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
 export async function fetchVehiclesAdmin() {
   const { data, error } = await supabase.from("vehicles").select("id, client_id, brand, model, plate, year, color, type");
   if (error) { console.error(error); return []; }
